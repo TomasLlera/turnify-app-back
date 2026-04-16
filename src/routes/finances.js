@@ -9,8 +9,8 @@ const {
   getFinanceSummary,
 } = require('../controllers/financesController');
 
+router.get('/summary/:businessId', auth, admin, getFinanceSummary);
 router.get('/:businessId', auth, admin, getFinances);
-router.get('/:businessId/summary', auth, admin, getFinanceSummary);
 router.post('/', auth, admin, createFinance);
 router.delete('/:id', auth, admin, deleteFinance);
 
