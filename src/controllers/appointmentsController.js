@@ -4,19 +4,37 @@ const pool = require('../db');
 exports.getAvailableSlots = async (req, res) => {
   const { businessId, date, serviceId, employeeId } = req.query;
   try {
-    const dayOfWeek = new Date(date + 'T00:00:00').getDay();
-
-    const [schedules] = await pool.query(
-      'SELECT * FROM schedules WHERE business_id = ? AND day_of_week = ?',
-      [businessId, dayOfWeek]
+    // 1. Verificar si hay una excepción para esta fecha específica
+    const [exceptions] = await pool.query(
+      'SELECT * FROM schedule_exceptions WHERE business_id = ? AND date = ?',
+      [businessId, date]
     );
-    if (!schedules[0]) return res.json([]);
+
+    // Si hay excepción y el día está cerrado → sin slots
+    if (exceptions[0] && exceptions[0].is_closed) return res.json([]);
+
+    let start_time, end_time;
+
+    if (exceptions[0] && !exceptions[0].is_closed) {
+      // Excepción con horario modificado
+      start_time = exceptions[0].start_time;
+      end_time   = exceptions[0].end_time;
+    } else {
+      // Sin excepción → usar horario base del día de la semana
+      const dayOfWeek = new Date(date + 'T00:00:00').getDay();
+      const [schedules] = await pool.query(
+        'SELECT * FROM schedules WHERE business_id = ? AND day_of_week = ?',
+        [businessId, dayOfWeek]
+      );
+      if (!schedules[0]) return res.json([]);
+      start_time = schedules[0].start_time;
+      end_time   = schedules[0].end_time;
+    }
 
     const [service] = await pool.query('SELECT * FROM services WHERE id = ?', [serviceId]);
     if (!service[0]) return res.status(404).json({ error: 'Service not found' });
 
     const duration = service[0].duration_minutes;
-    const { start_time, end_time } = schedules[0];
 
     // Si hay empleado seleccionado → solo bloquear slots ocupados POR ESE empleado
     // Si no hay empleado → comportamiento original (bloquear cualquier ocupado del negocio)
