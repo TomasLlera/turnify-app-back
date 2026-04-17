@@ -13,11 +13,11 @@ exports.getEmployees = async (req, res) => {
 };
 
 exports.createEmployee = async (req, res) => {
-  const { business_id, name, email, phone, base_salary } = req.body;
+  const { business_id, name, email, phone, base_salary, commission_rate } = req.body;
   try {
     const [result] = await pool.query(
-      'INSERT INTO employees (business_id, name, email, phone, base_salary) VALUES (?, ?, ?, ?, ?)',
-      [business_id, name, email, phone, base_salary || 0]
+      'INSERT INTO employees (business_id, name, email, phone, base_salary, commission_rate) VALUES (?, ?, ?, ?, ?, ?)',
+      [business_id, name, email, phone, base_salary || 0, commission_rate || 0]
     );
     res.status(201).json({ id: result.insertId });
   } catch (err) {
@@ -26,11 +26,11 @@ exports.createEmployee = async (req, res) => {
 };
 
 exports.updateEmployee = async (req, res) => {
-  const { name, email, phone, base_salary } = req.body;
+  const { name, email, phone, base_salary, commission_rate } = req.body;
   try {
     await pool.query(
-      'UPDATE employees SET name=?, email=?, phone=?, base_salary=? WHERE id=?',
-      [name, email, phone, base_salary, req.params.id]
+      'UPDATE employees SET name=?, email=?, phone=?, base_salary=?, commission_rate=? WHERE id=?',
+      [name, email, phone, base_salary, commission_rate ?? 0, req.params.id]
     );
     res.json({ message: 'Employee updated' });
   } catch (err) {
@@ -80,12 +80,25 @@ exports.getCommissions = async (req, res) => {
 exports.addPayment = async (req, res) => {
   const { employee_id, amount, notes } = req.body;
   try {
+    const [empRows] = await pool.query('SELECT * FROM employees WHERE id = ?', [employee_id]);
+    if (!empRows[0]) return res.status(404).json({ error: 'Employee not found' });
+    const employee = empRows[0];
+
     const [result] = await pool.query(
       'INSERT INTO employee_payments (employee_id, amount, notes) VALUES (?, ?, ?)',
       [employee_id, amount, notes]
     );
+
+    // Auto-registrar egreso en finances
+    const description = `Salary payment: ${employee.name}${notes ? ` — ${notes}` : ''}`;
+    await pool.query(
+      'INSERT INTO finances (business_id, type, amount, description, date) VALUES (?, ?, ?, ?, CURDATE())',
+      [employee.business_id, 'expense', amount, description]
+    );
+
     res.status(201).json({ id: result.insertId });
   } catch (err) {
+    console.error('addPayment error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -114,21 +127,23 @@ exports.getEmployeeSummary = async (req, res) => {
       'SELECT COALESCE(SUM(amount), 0) as total FROM commissions WHERE employee_id = ?',
       [req.params.employeeId]
     );
-
     const [payments] = await pool.query(
       'SELECT COALESCE(SUM(amount), 0) as total FROM employee_payments WHERE employee_id = ?',
       [req.params.employeeId]
     );
 
-    const totalEarned = Number(employee[0].base_salary) + Number(commissions[0].total);
+    const baseSalary = Number(employee[0].base_salary);
+    const totalCommissions = Number(commissions[0].total);
     const totalPaid = Number(payments[0].total);
-    const balance = totalEarned - totalPaid;
 
     res.json({
       employee: employee[0],
-      total_commissions: Number(commissions[0].total),
+      base_salary: baseSalary,
+      commission_rate: Number(employee[0].commission_rate),
+      total_commissions: totalCommissions,
+      total_earned: baseSalary + totalCommissions,
       total_paid: totalPaid,
-      balance,
+      balance: baseSalary + totalCommissions - totalPaid,
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
